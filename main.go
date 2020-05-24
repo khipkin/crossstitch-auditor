@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/khipkin/geddit"
@@ -21,6 +22,17 @@ const (
 
 type auditor struct {
 	redditSession *geddit.OAuthSession
+}
+
+type comment struct {
+	Link string `json:"link"`
+	Body string `json:"body"`
+}
+
+type post struct {
+	Link     string     `json:"link"`
+	Title    string     `json:"title"`
+	Comments []*comment `json:"comments"`
 }
 
 func newAuditor() (*auditor, error) {
@@ -58,8 +70,62 @@ func newAuditor() (*auditor, error) {
 	}, nil
 }
 
-func (a *auditor) auditUser(user string) string {
-	return user
+func (a *auditor) auditUser(user string) ([]*post, error) {
+	params := geddit.ListingOptions{
+		Limit: 100, // the max value
+	}
+	posts, err := a.redditSession.UserPosts(subreddit, user, geddit.NewSubmissions, params)
+	if err != nil {
+		return nil, err
+	}
+	comments, err := a.redditSession.UserComments(subreddit, user, geddit.NewSubmissions, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the auditMap, keyed by link fullID. "" is a placeholder for comments without a matching post.
+	auditMap := map[string]*post{
+		"": &post{Comments: []*comment{}},
+	}
+	for _, p := range posts {
+		auditMap[p.FullID] = &post{
+			Link:     p.FullPermalink(),
+			Title:    p.Title,
+			Comments: []*comment{},
+		}
+	}
+	for _, c := range comments {
+		parent := auditMap[""]
+		if p, ok := auditMap[c.LinkID]; ok {
+			parent = p
+		}
+		parent.Comments = append(parent.Comments, &comment{
+			Link: c.FullPermalink(),
+			Body: c.Body,
+		})
+	}
+
+	ret := []*post{}
+	for _, p := range auditMap {
+		ret = append(ret, p)
+	}
+	return ret, nil
+}
+
+func buildAuditString(postData []*post) string {
+	audit := ""
+	for _, p := range postData {
+		if p.Link == "" {
+			audit += "\n**(comments on other people's posts)**\n"
+		} else {
+			audit += fmt.Sprintf("\n[**%s**](%s)\n", p.Title, p.Link)
+		}
+
+		for _, c := range p.Comments {
+			audit += fmt.Sprintf(" *  ([link](%s)) `%s`\n", c.Link, strings.Replace(c.Body, "\n", " ", -1 /*unlimited*/))
+		}
+	}
+	return audit
 }
 
 // AuditUser processes the JSON encoded "user" field in the body
@@ -83,10 +149,20 @@ func AuditUser(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Error setting up auditor! %v", err)
 		return
 	}
-	fmt.Fprint(w, a.auditUser(html.EscapeString(d.User)))
+	posts, err := a.auditUser(html.EscapeString(d.User))
+	if err != nil {
+		fmt.Fprintf(w, "Error building post data! %v", err)
+		return
+	}
+
+	result, err := json.Marshal(posts)
+	if err != nil {
+		fmt.Fprintf(w, "Error marshalling response to JSON! %v", err)
+	}
+	fmt.Fprint(w, result)
 }
 
-// main processed the given REDDIT_USER.
+// main processes the given REDDIT_USER.
 // Prints any errors encountered during execution.
 func main() {
 	user := os.Getenv("REDDIT_USER")
@@ -98,5 +174,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error setting up auditor! %v", err)
 	}
-	log.Printf(a.auditUser(user))
+	postData, err := a.auditUser(user)
+	if err != nil {
+		log.Fatalf("Error building post data! %v", err)
+	}
+	log.Printf(buildAuditString(postData))
 }
