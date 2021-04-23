@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	subreddit      = "CrossStitch"
+	subreddit      = "CrossStitch" // TODO: paremterize this
 	redditClientID = "Kkfhbwt2W5C0Rw"
-	redditUsername = "CrossStitchBot"
+	redditUsername = "CrossStitchBot" // TODO: paremterize this
 )
 
 type auditor struct {
@@ -87,6 +87,7 @@ func (a *auditor) auditUser(user string) ([]*post, error) {
 	auditMap := map[string]*post{
 		"": &post{Comments: []*comment{}},
 	}
+	// TODO: filter out posts that have been removed by a moderator
 	for _, p := range posts {
 		auditMap[p.FullID] = &post{
 			Link:     p.FullPermalink(),
@@ -94,6 +95,7 @@ func (a *auditor) auditUser(user string) ([]*post, error) {
 			Comments: []*comment{},
 		}
 	}
+	// TODO: filter out comments on posts that have been removed by a moderator
 	for _, c := range comments {
 		parent := auditMap[""]
 		if p, ok := auditMap[c.LinkID]; ok {
@@ -116,18 +118,20 @@ func buildAuditString(postData []*post) string {
 	audit := ""
 	for _, p := range postData {
 		if p.Link == "" {
-			audit += "\n**(comments on other people's posts)**\n"
+			audit += "\n**(comments on other people's posts)**\n\n"
 		} else {
-			audit += fmt.Sprintf("\n[**%s**](%s)\n", p.Title, p.Link)
+			audit += fmt.Sprintf("\n[**%s**](%s)\n\n", p.Title, p.Link)
 		}
 
 		for _, c := range p.Comments {
-			audit += fmt.Sprintf(" *  ([link](%s)) `%s`\n", c.Link, strings.Replace(c.Body, "\n", " ", -1 /*unlimited*/))
+			audit += fmt.Sprintf(" *  [`%s`](%s)\n", strings.Replace(c.Body, "\n", " ", -1 /*unlimited*/), c.Link)
 		}
 	}
 	return audit
 }
 
+// AuditUser is the function that should be invoked if this code is
+// hosted as a Cloud Function on Google Cloud.
 // AuditUser processes the JSON encoded "user" field in the body
 // of the request or prints "No user given!" if there isn't one.
 // Prints any errors encountered during execution.
@@ -162,6 +166,7 @@ func AuditUser(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, result)
 }
 
+// main is the function invoked if this code is run from the command line.
 // main processes the given REDDIT_USER.
 // Prints any errors encountered during execution.
 func main() {
